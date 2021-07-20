@@ -50,11 +50,6 @@
 
 #define CAN_DO_USABLE 0
 
-struct ignore {
-    ignore *next;
-    unsigned long sequence;
-};
-
 struct win {
     Window id;
 #if HAS_NAME_WINDOW_PIXMAP
@@ -96,7 +91,6 @@ static Bool clipChanged;
 static Bool hasNamePixmap;
 #endif
 static int root_height, root_width;
-static ignore *ignore_head, **ignore_tail = &ignore_head;
 static int xfixes_event, xfixes_error;
 static int damage_event, damage_error;
 static int composite_event, composite_error;
@@ -104,6 +98,8 @@ static int render_event, render_error;
 static int xshape_event, xshape_error;
 static Bool synchronize;
 static int composite_opcode;
+
+static std::list<unsigned long> ignores;
 
 /* find these once and be done with it */
 static Atom opacityAtom;
@@ -181,31 +177,26 @@ solid_picture(Display *dpy, Bool argb, double a, double r, double g, double b) {
 
 static void
 discard_ignore(Display *dpy, unsigned long sequence) {
-    while (ignore_head) {
-        if ((long) (sequence - ignore_head->sequence) > 0) {
-            ignore *next = ignore_head->next;
-            delete ignore_head;
-            ignore_head = next;
-            if (!ignore_head)
-                ignore_tail = &ignore_head;
-        } else
+    for(auto it = ignores.begin(); it != ignores.end(); it++) {
+        if(sequence - *it > 0) {
+            auto new_it = std::next(it);
+            ignores.erase(it);
+            it = new_it;
+        } else {
             break;
+        }
     }
 }
 
 static void
 set_ignore(Display *dpy, unsigned long sequence) {
-    auto *i = new ignore;
-    i->sequence = sequence;
-    i->next = nullptr;
-    *ignore_tail = i;
-    ignore_tail = &i->next;
+    ignores.push_back(sequence);
 }
 
 static int
 should_ignore(Display *dpy, unsigned long sequence) {
     discard_ignore(dpy, sequence);
-    return ignore_head && ignore_head->sequence == sequence;
+    return !ignores.empty() && *ignores.begin() == sequence;
 }
 
 static win_it
@@ -343,10 +334,10 @@ paint_all(Display *dpy, XserverRegion region) {
         if (!w->usable)
         continue;
 #endif
-        /* never painted, ignore it */
+        /* never painted, ignores it */
         if (!w->damaged)
             continue;
-        /* if invisible, ignore it */
+        /* if invisible, ignores it */
         if (w->a.x + w->a.width < 1 || w->a.y + w->a.height < 1
             || w->a.x >= root_width || w->a.y >= root_height)
             continue;
@@ -714,9 +705,6 @@ determine_wintype(Display *dpy, Window w) {
     return winNormalAtom;
 }
 
-#pragma clang diagnostic push
-#pragma ide diagnostic ignored "DanglingPointers"
-
 static void
 add_win(Display *dpy, Window id, Window prev) {
 
@@ -769,8 +757,6 @@ add_win(Display *dpy, Window id, Window prev) {
     if (placeholder.a.map_state == IsViewable)
         map_win(dpy, id);
 }
-
-#pragma clang diagnostic pop
 
 static void
 restack_win(Display *dpy, win_it w, win_it new_above) {
