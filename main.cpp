@@ -760,14 +760,14 @@ add_win(Display *dpy, Window id, Window prev) {
 
 static void
 restack_win(Display *dpy, win_it w, win_it new_above) {
-    auto old_above = win_list.begin();
+    auto old_above = win_list.end();
     auto next_w = std::next(w);
     if (next_w != win_list.end())
         old_above = next_w;
 
     if (old_above != new_above) {
-//        win_list.splice(next_w, win_list, new_above);
-        win_list.splice(std::prev(new_above), win_list, w);
+        win_list.insert(new_above, *w);
+        win_list.erase(w);
     }
 }
 
