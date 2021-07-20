@@ -81,7 +81,7 @@ struct win {
     /* for drawing translucent windows */
     XserverRegion borderClip;
 };
-using win_li = std::_List_iterator<win>;
+using win_it = std::_List_iterator<win>;
 
 struct conv {
     int size;
@@ -146,13 +146,13 @@ enum CompMode {
 };
 
 static void
-determine_mode(Display *dpy, win_li w);
+determine_mode(Display *dpy, win_it w);
 
 static double
-get_opacity_percent(Display *dpy, win_li w, double def);
+get_opacity_percent(Display *dpy, win_it w, double def);
 
 static XserverRegion
-win_extents(Display *dpy, win_li w);
+win_extents(Display *dpy, win_it w);
 
 static CompMode compMode = CompSimple;
 
@@ -215,7 +215,7 @@ should_ignore(Display *dpy, unsigned long sequence) {
     return ignore_head && ignore_head->sequence == sequence;
 }
 
-static win_li
+static win_it
 find_win(Window id) {
     for (auto it = win_list.begin(); it != win_list.end(); it++) {
         if (it->id == id) {
@@ -287,7 +287,7 @@ paint_root(Display *dpy) {
 }
 
 static XserverRegion
-win_extents(Display *dpy, win_li w) {
+win_extents(Display *dpy, win_it w) {
     XRectangle r = {static_cast<short>(w->a.x),
                     static_cast<short>(w->a.y),
                     static_cast<unsigned short>(w->a.width + w->a.border_width * 2),
@@ -296,7 +296,7 @@ win_extents(Display *dpy, win_li w) {
 }
 
 static XserverRegion
-border_size(Display *dpy, win_li w) {
+border_size(Display *dpy, win_it w) {
     XserverRegion border;
     /*
      * if window doesn't exist anymore,  this will generate an error
@@ -497,7 +497,7 @@ add_damage(Display *dpy, XserverRegion damage) {
 }
 
 static void
-repair_win(Display *dpy, win_li w) {
+repair_win(Display *dpy, win_it w) {
     XserverRegion parts;
 
     if (!w->damaged) {
@@ -517,7 +517,7 @@ repair_win(Display *dpy, win_li w) {
 }
 
 static unsigned int
-get_opacity_prop(Display *dpy, win_li w, unsigned int def);
+get_opacity_prop(Display *dpy, win_it w, unsigned int def);
 
 static void
 map_win(Display *dpy, Window id) {
@@ -543,7 +543,7 @@ map_win(Display *dpy, Window id) {
 }
 
 static void
-finish_unmap_win(Display *dpy, win_li w) {
+finish_unmap_win(Display *dpy, win_it w) {
     w->damaged = 0;
 #if CAN_DO_USABLE
     w->usable = False;
@@ -586,7 +586,7 @@ finish_unmap_win(Display *dpy, win_li w) {
 #if HAS_NAME_WINDOW_PIXMAP
 
 static void
-unmap_callback(Display *dpy, win_li w, Bool gone) {
+unmap_callback(Display *dpy, win_it w, Bool gone) {
     finish_unmap_win(dpy, w);
 }
 
@@ -594,7 +594,7 @@ unmap_callback(Display *dpy, win_li w, Bool gone) {
 
 static void
 unmap_win(Display *dpy, Window id, Bool fade) {
-    win_li w = find_win(id);
+    win_it w = find_win(id);
     if (w == win_list.end())
         return;
     w->a.map_state = IsUnmapped;
@@ -606,7 +606,7 @@ unmap_win(Display *dpy, Window id, Bool fade) {
    otherwise the value
  */
 static unsigned int
-get_opacity_prop(Display *dpy, win_li w, unsigned int def) {
+get_opacity_prop(Display *dpy, win_it w, unsigned int def) {
     Atom actual;
     int format;
     unsigned long n, left;
@@ -630,7 +630,7 @@ get_opacity_prop(Display *dpy, win_li w, unsigned int def) {
    otherwise: the value
 */
 static double
-get_opacity_percent(Display *dpy, win_li w, double def) {
+get_opacity_percent(Display *dpy, win_it w, double def) {
     unsigned int opacity = get_opacity_prop(dpy, w, (unsigned int) (OPAQUE * def));
 
     return opacity * 1.0 / OPAQUE;
@@ -662,7 +662,7 @@ get_wintype_prop(Display *dpy, Window w) {
 }
 
 static void
-determine_mode(Display *dpy, win_li w) {
+determine_mode(Display *dpy, win_it w) {
     int mode;
     XRenderPictFormat *format;
 
@@ -780,7 +780,7 @@ add_win(Display *dpy, Window id, Window prev) {
 #pragma clang diagnostic pop
 
 static void
-restack_win(Display *dpy, win_li w, win_li new_above) {
+restack_win(Display *dpy, win_it w, win_it new_above) {
     auto old_above = win_list.begin();
     auto next_w = std::next(w);
     if (next_w != win_list.end())
@@ -794,7 +794,7 @@ restack_win(Display *dpy, win_li w, win_li new_above) {
 
 static void
 configure_win(Display *dpy, XConfigureEvent *ce) {
-    win_li w = find_win(ce->window);
+    win_it w = find_win(ce->window);
     XserverRegion damage = None;
 
     if (w == win_list.end()) {
@@ -855,8 +855,8 @@ configure_win(Display *dpy, XConfigureEvent *ce) {
 
 static void
 circulate_win(Display *dpy, XCirculateEvent *ce) {
-    win_li w = find_win(ce->window);
-    win_li new_above;
+    win_it w = find_win(ce->window);
+    win_it new_above;
 
     if (w == win_list.end())
         return;
@@ -870,7 +870,7 @@ circulate_win(Display *dpy, XCirculateEvent *ce) {
 }
 
 static void
-finish_destroy_win(Display *dpy, win_li w, Bool gone) {
+finish_destroy_win(Display *dpy, win_it w, Bool gone) {
 
     if (gone)
         finish_unmap_win(dpy, w);
@@ -894,7 +894,7 @@ finish_destroy_win(Display *dpy, win_li w, Bool gone) {
 #if HAS_NAME_WINDOW_PIXMAP
 
 static void
-destroy_callback(Display *dpy, win_li w, Bool gone) {
+destroy_callback(Display *dpy, win_it w, Bool gone) {
     finish_destroy_win(dpy, w, gone);
 }
 
@@ -902,7 +902,7 @@ destroy_callback(Display *dpy, win_li w, Bool gone) {
 
 static void
 destroy_win(Display *dpy, Window id, Bool gone) {
-    win_li w = find_win(id);
+    win_it w = find_win(id);
     {
         finish_destroy_win(dpy, w, gone);
     }
@@ -930,7 +930,7 @@ dump_wins (void)
 
 static void
 damage_win(Display *dpy, XDamageNotifyEvent *de) {
-    win_li w = find_win(de->drawable);
+    win_it w = find_win(de->drawable);
 
     if (w == win_list.end())
         return;
@@ -1005,7 +1005,7 @@ shape_kind(int kind)
 
 static void
 shape_win(Display *dpy, XShapeEvent *se) {
-    win_li w = find_win(se->window);
+    win_it w = find_win(se->window);
 
     if (w == win_list.end())
         return;
@@ -1461,7 +1461,7 @@ main(int argc, char **argv) {
                         /* check if Trans property was changed */
                         if (ev.xproperty.atom == opacityAtom) {
                             /* reset mode and redraw window */
-                            win_li w = find_win(ev.xproperty.window);
+                            win_it w = find_win(ev.xproperty.window);
                             if (w != win_list.end()) {
                                 w->opacity = get_opacity_prop(dpy, w, OPAQUE);
                                 determine_mode(dpy, w);
