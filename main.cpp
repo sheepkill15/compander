@@ -42,6 +42,7 @@
 #include <X11/extensions/Xrender.h>
 #include <X11/extensions/shape.h>
 #include <vector>
+#include <list>
 
 #if COMPOSITE_MAJOR > 0 || COMPOSITE_MINOR >= 2
 #define HAS_NAME_WINDOW_PIXMAP 1
@@ -55,7 +56,6 @@ struct ignore {
 };
 
 struct win {
-    win *next;
     Window id;
 #if HAS_NAME_WINDOW_PIXMAP
     Pixmap pixmap;
@@ -80,15 +80,15 @@ struct win {
 
     /* for drawing translucent windows */
     XserverRegion borderClip;
-    win *prev_trans;
 };
+using win_li = std::_List_iterator<win>;
 
 struct conv {
     int size;
     double *data;
 };
 
-static win *list;
+static std::list<win> win_list;
 static int scr;
 static Window root;
 static Picture rootPicture;
@@ -146,13 +146,13 @@ enum CompMode {
 };
 
 static void
-determine_mode(Display *dpy, win *w);
+determine_mode(Display *dpy, win_li w);
 
 static double
-get_opacity_percent(Display *dpy, win *w, double def);
+get_opacity_percent(Display *dpy, win_li w, double def);
 
 static XserverRegion
-win_extents(Display *dpy, win *w);
+win_extents(Display *dpy, win_li w);
 
 static CompMode compMode = CompSimple;
 
@@ -178,9 +178,9 @@ solid_picture(Display *dpy, Bool argb, double a, double r, double g, double b) {
     }
 
     XRenderColor c = {static_cast<unsigned short>(r * 0xffff),
-         static_cast<unsigned short>(g * 0xffff),
-         static_cast<unsigned short>(b * 0xffff),
-         static_cast<unsigned short>(a * 0xffff)};
+                      static_cast<unsigned short>(g * 0xffff),
+                      static_cast<unsigned short>(b * 0xffff),
+                      static_cast<unsigned short>(a * 0xffff)};
     XRenderFillRectangle(dpy, PictOpSrc, picture, &c, 0, 0, 1, 1);
     XFreePixmap(dpy, pixmap);
     return picture;
@@ -215,14 +215,14 @@ should_ignore(Display *dpy, unsigned long sequence) {
     return ignore_head && ignore_head->sequence == sequence;
 }
 
-static win *
-find_win(Display *dpy, Window id) {
-    win *w;
-
-    for (w = list; w; w = w->next)
-        if (w->id == id)
-            return w;
-    return nullptr;
+static win_li
+find_win(Window id) {
+    for (auto it = win_list.begin(); it != win_list.end(); it++) {
+        if (it->id == id) {
+            return it;
+        }
+    }
+    return win_list.end();
 }
 
 static const char *backgroundProps[] = {
@@ -287,7 +287,7 @@ paint_root(Display *dpy) {
 }
 
 static XserverRegion
-win_extents(Display *dpy, win *w) {
+win_extents(Display *dpy, win_li w) {
     XRectangle r = {static_cast<short>(w->a.x),
                     static_cast<short>(w->a.y),
                     static_cast<unsigned short>(w->a.width + w->a.border_width * 2),
@@ -296,7 +296,7 @@ win_extents(Display *dpy, win *w) {
 }
 
 static XserverRegion
-border_size(Display *dpy, win *w) {
+border_size(Display *dpy, win_li w) {
     XserverRegion border;
     /*
      * if window doesn't exist anymore,  this will generate an error
@@ -317,8 +317,6 @@ border_size(Display *dpy, win *w) {
 
 static void
 paint_all(Display *dpy, XserverRegion region) {
-    win *w;
-    win *t = nullptr;
 
     if (!region) {
         XRectangle r = {0, 0, static_cast<unsigned short>(root_width), static_cast<unsigned short>(root_height)};
@@ -345,7 +343,9 @@ paint_all(Display *dpy, XserverRegion region) {
 #if DEBUG_REPAINT
     printf ("paint:");
 #endif
-    for (w = list; w; w = w->next) {
+
+    std::list<win *> transparent;
+    for (auto w = win_list.begin(); w != win_list.end(); w++) {
 #if CAN_DO_USABLE
         if (!w->usable)
         continue;
@@ -371,9 +371,9 @@ paint_all(Display *dpy, XserverRegion region) {
             format = XRenderFindVisualFormat(dpy, w->a.visual);
             pa.subwindow_mode = IncludeInferiors;
             w->picture = XRenderCreatePicture(dpy, draw,
-                                              format,
-                                              CPSubwindowMode,
-                                              &pa);
+                                             format,
+                                             CPSubwindowMode,
+                                             &pa);
         }
 #if DEBUG_REPAINT
         printf (" 0x%x", w->id);
@@ -397,6 +397,7 @@ paint_all(Display *dpy, XserverRegion region) {
             w->borderSize = border_size(dpy, w);
         if (!w->extents)
             w->extents = win_extents(dpy, w);
+
         if (w->mode == WINDOW_SOLID) {
             int x, y, wid, hei;
 #if HAS_NAME_WINDOW_PIXMAP
@@ -414,7 +415,7 @@ paint_all(Display *dpy, XserverRegion region) {
             set_ignore(dpy, NextRequest (dpy));
             XFixesSubtractRegion(dpy, region, region, w->borderSize);
             set_ignore(dpy, NextRequest (dpy));
-            XRenderComposite(dpy, w->opacity != OPAQUE ? PictOpOver : PictOpSrc, w->picture, None, rootBuffer,
+            XRenderComposite(dpy, PictOpSrc, w->picture, None, rootBuffer,
                              0, 0, 0, 0,
                              x, y, wid, hei);
         }
@@ -423,8 +424,7 @@ paint_all(Display *dpy, XserverRegion region) {
             XFixesCopyRegion(dpy, w->borderClip, region);
             XFixesIntersectRegion(dpy, w->borderClip, w->borderClip, w->borderSize);
         }
-        w->prev_trans = t;
-        t = w;
+        transparent.push_front(&*w);
     }
 #if DEBUG_REPAINT
     printf ("\n");
@@ -432,7 +432,7 @@ paint_all(Display *dpy, XserverRegion region) {
 #endif
     XFixesSetPictureClipRegion(dpy, rootBuffer, 0, 0, region);
     paint_root(dpy);
-    for (w = t; w; w = w->prev_trans) {
+    for (win *w : transparent) {
         XFixesSetPictureClipRegion(dpy, rootBuffer, 0, 0, w->borderClip);
         switch (compMode) {
             case CompSimple:
@@ -497,7 +497,7 @@ add_damage(Display *dpy, XserverRegion damage) {
 }
 
 static void
-repair_win(Display *dpy, win *w) {
+repair_win(Display *dpy, win_li w) {
     XserverRegion parts;
 
     if (!w->damaged) {
@@ -505,7 +505,6 @@ repair_win(Display *dpy, win *w) {
         set_ignore(dpy, NextRequest (dpy));
         XDamageSubtract(dpy, w->damage, None, None);
     } else {
-        XserverRegion o;
         parts = XFixesCreateRegion(dpy, nullptr, 0);
         set_ignore(dpy, NextRequest (dpy));
         XDamageSubtract(dpy, w->damage, None, parts);
@@ -518,13 +517,13 @@ repair_win(Display *dpy, win *w) {
 }
 
 static unsigned int
-get_opacity_prop(Display *dpy, win *w, unsigned int def);
+get_opacity_prop(Display *dpy, win_li w, unsigned int def);
 
 static void
 map_win(Display *dpy, Window id) {
-    win *w = find_win(dpy, id);
+    auto w = find_win(id);
 
-    if (!w)
+    if (w == win_list.end())
         return;
 
     w->a.map_state = IsViewable;
@@ -544,7 +543,7 @@ map_win(Display *dpy, Window id) {
 }
 
 static void
-finish_unmap_win(Display *dpy, win *w) {
+finish_unmap_win(Display *dpy, win_li w) {
     w->damaged = 0;
 #if CAN_DO_USABLE
     w->usable = False;
@@ -587,7 +586,7 @@ finish_unmap_win(Display *dpy, win *w) {
 #if HAS_NAME_WINDOW_PIXMAP
 
 static void
-unmap_callback(Display *dpy, win *w, Bool gone) {
+unmap_callback(Display *dpy, win_li w, Bool gone) {
     finish_unmap_win(dpy, w);
 }
 
@@ -595,8 +594,8 @@ unmap_callback(Display *dpy, win *w, Bool gone) {
 
 static void
 unmap_win(Display *dpy, Window id, Bool fade) {
-    win *w = find_win(dpy, id);
-    if (!w)
+    win_li w = find_win(id);
+    if (w == win_list.end())
         return;
     w->a.map_state = IsUnmapped;
     finish_unmap_win(dpy, w);
@@ -607,7 +606,7 @@ unmap_win(Display *dpy, Window id, Bool fade) {
    otherwise the value
  */
 static unsigned int
-get_opacity_prop(Display *dpy, win *w, unsigned int def) {
+get_opacity_prop(Display *dpy, win_li w, unsigned int def) {
     Atom actual;
     int format;
     unsigned long n, left;
@@ -631,7 +630,7 @@ get_opacity_prop(Display *dpy, win *w, unsigned int def) {
    otherwise: the value
 */
 static double
-get_opacity_percent(Display *dpy, win *w, double def) {
+get_opacity_percent(Display *dpy, win_li w, double def) {
     unsigned int opacity = get_opacity_prop(dpy, w, (unsigned int) (OPAQUE * def));
 
     return opacity * 1.0 / OPAQUE;
@@ -663,7 +662,7 @@ get_wintype_prop(Display *dpy, Window w) {
 }
 
 static void
-determine_mode(Display *dpy, win *w) {
+determine_mode(Display *dpy, win_li w) {
     int mode;
     XRenderPictFormat *format;
 
@@ -727,92 +726,78 @@ determine_wintype(Display *dpy, Window w) {
 
 static void
 add_win(Display *dpy, Window id, Window prev) {
-    win *newWindow = new win;
-    win **p;
-    if (prev) {
-        for (p = &list; *p; p = &(*p)->next)
-            if ((*p)->id == prev)
-                break;
-    } else
-        p = &list;
-    newWindow->id = id;
+
+    win placeholder = {.id = id};
     set_ignore(dpy, NextRequest (dpy));
-    if (!XGetWindowAttributes(dpy, id, &newWindow->a)) {
-        delete newWindow;
+    if (!XGetWindowAttributes(dpy, id, &placeholder.a)) {
         return;
     }
-    newWindow->shaped = False;
-    newWindow->shape_bounds.x = newWindow->a.x;
-    newWindow->shape_bounds.y = newWindow->a.y;
-    newWindow->shape_bounds.width = newWindow->a.width;
-    newWindow->shape_bounds.height = newWindow->a.height;
-    newWindow->damaged = 0;
+
+    placeholder.shaped = False;
+    placeholder.shape_bounds.x = placeholder.a.x;
+    placeholder.shape_bounds.y = placeholder.a.y;
+    placeholder.shape_bounds.width = placeholder.a.width;
+    placeholder.shape_bounds.height = placeholder.a.height;
+    placeholder.damaged = 0;
 #if CAN_DO_USABLE
-    newWindow->usable = False;
+    placeholder.usable = False;
 #endif
 #if HAS_NAME_WINDOW_PIXMAP
-    newWindow->pixmap = None;
+    placeholder.pixmap = None;
 #endif
-    newWindow->picture = None;
-    if (newWindow->a.c_class == InputOnly) {
-        newWindow->damage_sequence = 0;
-        newWindow->damage = None;
+    placeholder.picture = None;
+    if (placeholder.a.c_class == InputOnly) {
+        placeholder.damage_sequence = 0;
+        placeholder.damage = None;
     } else {
-        newWindow->damage_sequence = NextRequest (dpy);
-        newWindow->damage = XDamageCreate(dpy, id, XDamageReportNonEmpty);
+        placeholder.damage_sequence = NextRequest (dpy);
+        placeholder.damage = XDamageCreate(dpy, id, XDamageReportNonEmpty);
         XShapeSelectInput(dpy, id, ShapeNotifyMask);
     }
-    newWindow->alphaPict = None;
-    newWindow->borderSize = None;
-    newWindow->extents = None;
-    newWindow->opacity = OPAQUE;
+    placeholder.alphaPict = None;
+    placeholder.borderSize = None;
+    placeholder.extents = None;
+    placeholder.opacity = OPAQUE;
 
-    newWindow->borderClip = None;
-    newWindow->prev_trans = nullptr;
+    placeholder.borderClip = None;
 
-    newWindow->windowType = determine_wintype(dpy, newWindow->id);
+    placeholder.windowType = determine_wintype(dpy, placeholder.id);
 
-    newWindow->next = *p;
-    *p = newWindow;
-    if (newWindow->a.map_state == IsViewable)
+    if (prev) {
+        for (auto it = win_list.begin(); it != win_list.end(); ++it) {
+            if (it->id == prev) {
+                win_list.insert(it, placeholder);
+                break;
+            }
+        }
+    } else
+        win_list.push_front(placeholder);
+
+    if (placeholder.a.map_state == IsViewable)
         map_win(dpy, id);
 }
 
 #pragma clang diagnostic pop
 
 static void
-restack_win(Display *dpy, win *w, Window new_above) {
-    Window old_above;
+restack_win(Display *dpy, win_li w, win_li new_above) {
+    auto old_above = win_list.begin();
+    auto next_w = std::next(w);
+    if (next_w != win_list.end())
+        old_above = next_w;
 
-    if (w->next)
-        old_above = w->next->id;
-    else
-        old_above = None;
     if (old_above != new_above) {
-        win **prev;
-
-        /* unhook */
-        for (prev = &list; *prev; prev = &(*prev)->next)
-            if ((*prev) == w)
-                break;
-        *prev = w->next;
-
-        /* rehook */
-        for (prev = &list; *prev; prev = &(*prev)->next) {
-            if ((*prev)->id == new_above)
-                break;
-        }
-        w->next = *prev;
-        *prev = w;
+//        win_list.splice(next_w, win_list, new_above);
+        win_list.splice(std::prev(new_above), win_list, w);
     }
 }
 
 static void
 configure_win(Display *dpy, XConfigureEvent *ce) {
-    win *w = find_win(dpy, ce->window);
+    win_li w = find_win(ce->window);
     XserverRegion damage = None;
 
-    if (!w) {
+    if (w == win_list.end()) {
         if (ce->window == root) {
             if (rootBuffer) {
                 XRenderFreePicture(dpy, rootBuffer);
@@ -851,7 +836,7 @@ configure_win(Display *dpy, XConfigureEvent *ce) {
     w->a.height = ce->height;
     w->a.border_width = ce->border_width;
     w->a.override_redirect = ce->override_redirect;
-    restack_win(dpy, w, ce->above);
+    restack_win(dpy, w, find_win(ce->above));
     if (damage) {
         XserverRegion extents = win_extents(dpy, w);
         XFixesUnionRegion(dpy, damage, damage, extents);
@@ -870,62 +855,56 @@ configure_win(Display *dpy, XConfigureEvent *ce) {
 
 static void
 circulate_win(Display *dpy, XCirculateEvent *ce) {
-    win *w = find_win(dpy, ce->window);
-    Window new_above;
+    win_li w = find_win(ce->window);
+    win_li new_above;
 
-    if (!w)
+    if (w == win_list.end())
         return;
 
     if (ce->place == PlaceOnTop)
-        new_above = list->id;
+        new_above = win_list.begin();
     else
-        new_above = None;
+        new_above = win_list.end();
     restack_win(dpy, w, new_above);
     clipChanged = True;
 }
 
 static void
-finish_destroy_win(Display *dpy, Window id, Bool gone) {
-    win **prev, *w;
+finish_destroy_win(Display *dpy, win_li w, Bool gone) {
 
-    for (prev = &list; (w = *prev); prev = &w->next)
-        if (w->id == id) {
-            if (gone)
-                finish_unmap_win(dpy, w);
-            *prev = w->next;
-            if (w->picture) {
-                set_ignore(dpy, NextRequest (dpy));
-                XRenderFreePicture(dpy, w->picture);
-                w->picture = None;
-            }
-            if (w->alphaPict) {
-                XRenderFreePicture(dpy, w->alphaPict);
-                w->alphaPict = None;
-            }
-            if (w->damage != None) {
-                set_ignore(dpy, NextRequest (dpy));
-                XDamageDestroy(dpy, w->damage);
-                w->damage = None;
-            }
-            delete w;
-            break;
-        }
+    if (gone)
+        finish_unmap_win(dpy, w);
+    if (w->picture) {
+        set_ignore(dpy, NextRequest (dpy));
+        XRenderFreePicture(dpy, w->picture);
+        w->picture = None;
+    }
+    if (w->alphaPict) {
+        XRenderFreePicture(dpy, w->alphaPict);
+        w->alphaPict = None;
+    }
+    if (w->damage != None) {
+        set_ignore(dpy, NextRequest (dpy));
+        XDamageDestroy(dpy, w->damage);
+        w->damage = None;
+    }
+    win_list.erase(w);
 }
 
 #if HAS_NAME_WINDOW_PIXMAP
 
 static void
-destroy_callback(Display *dpy, win *w, Bool gone) {
-    finish_destroy_win(dpy, w->id, gone);
+destroy_callback(Display *dpy, win_li w, Bool gone) {
+    finish_destroy_win(dpy, w, gone);
 }
 
 #endif
 
 static void
 destroy_win(Display *dpy, Window id, Bool gone) {
-    win *w = find_win(dpy, id);
+    win_li w = find_win(id);
     {
-        finish_destroy_win(dpy, id, gone);
+        finish_destroy_win(dpy, w, gone);
     }
 }
 
@@ -951,9 +930,9 @@ dump_wins (void)
 
 static void
 damage_win(Display *dpy, XDamageNotifyEvent *de) {
-    win *w = find_win(dpy, de->drawable);
+    win_li w = find_win(de->drawable);
 
-    if (!w)
+    if (w == win_list.end())
         return;
 #if CAN_DO_USABLE
     if (!w->usable)
@@ -1026,9 +1005,9 @@ shape_kind(int kind)
 
 static void
 shape_win(Display *dpy, XShapeEvent *se) {
-    win *w = find_win(dpy, se->window);
+    win_li w = find_win(se->window);
 
-    if (!w)
+    if (w == win_list.end())
         return;
 
     if (se->kind == ShapeClip || se->kind == ShapeBounding) {
@@ -1296,7 +1275,7 @@ main(int argc, char **argv) {
     std::vector<XRectangle> expose_rects;
     int size_expose = 0;
     int n_expose = 0;
-     pollfd ufd{};
+    pollfd ufd{};
     int p;
     int composite_major, composite_minor;
     char *display = nullptr;
@@ -1411,7 +1390,7 @@ main(int argc, char **argv) {
     ufd.events = POLLIN;
     if (!autoRedirect)
         paint_all(dpy, None);
-    while(true) {
+    while (true) {
         /*	dump_wins (); */
         do {
             if (autoRedirect)
@@ -1482,8 +1461,8 @@ main(int argc, char **argv) {
                         /* check if Trans property was changed */
                         if (ev.xproperty.atom == opacityAtom) {
                             /* reset mode and redraw window */
-                            win *w = find_win(dpy, ev.xproperty.window);
-                            if (w) {
+                            win_li w = find_win(ev.xproperty.window);
+                            if (w != win_list.end()) {
                                 w->opacity = get_opacity_prop(dpy, w, OPAQUE);
                                 determine_mode(dpy, w);
                             }
