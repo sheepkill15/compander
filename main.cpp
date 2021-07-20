@@ -83,11 +83,6 @@ struct win {
 };
 using win_it = std::_List_iterator<win>;
 
-struct conv {
-    int size;
-    double *data;
-};
-
 static std::list<win> win_list;
 static int scr;
 static Window root;
@@ -127,8 +122,6 @@ static Atom winNormalAtom;
 
 #define TRANSLUCENT    0xe0000000
 #define OPAQUE        0xffffffff
-
-static conv *gaussianMap;
 
 #define WINDOW_SOLID    0
 #define WINDOW_TRANS    1
